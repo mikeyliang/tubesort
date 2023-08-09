@@ -1,10 +1,7 @@
 import RPi.GPIO as GPIO
 import time
 
-# Pin Definitions
-X_LIMIT_PIN = 9
-Y_LIMIT_PIN = 10
-Z_LIMIT_PIN = 11
+
 
 def setup_gpio():
     GPIO.setmode(GPIO.BCM)
