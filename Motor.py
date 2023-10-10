@@ -10,8 +10,13 @@ import threading
 # Setup GPIO pins
 X_DIR = 20   # Direction pin
 X_STEP = 21  # Step pin
-Y_DIR = 27
-Y_STEP = 28
+Y_DIR = 23
+Y_STEP = 24
+Z_DIR = 5
+Z_STEP = 6
+
+Z_DIR = 5
+Z_STEP = 6
 CW = 1     # Clockwise Rotation
 CCW = 0    # Counterclockwise Rotation
 
@@ -20,9 +25,11 @@ X_LIMIT_PIN = 9
 Y_LIMIT_PIN = 10
 Z_LIMIT_PIN = 11
 
+SERVO_PIN = 22
+
 # Step the motor
 step_count = 200  # Number of steps to take
-delay = 0.005  # Time delay between steps. Adjust as needed for your motor/driver combination.
+delay = 0.002  # Time delay between steps. Adjust as needed for your motor/driver combination.
 
 
     
@@ -51,15 +58,23 @@ class Motor(object):
         GPIO.setup(Y_STEP, GPIO.OUT)
         GPIO.output(Y_DIR, CW)
 
+        # setup y motor pins
+        GPIO.setup(Z_DIR, GPIO.OUT)
+        GPIO.setup(Z_STEP, GPIO.OUT)
+        GPIO.output(Z_DIR, CW)
+
         # setup limit switch pins
         GPIO.setup(X_LIMIT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(Y_LIMIT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(Z_LIMIT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
+        GPIO.setup(SERVO_PIN, GPIO.OUT)
+
         self.current_pos = [0, 0, 0]
 
     def __del__(self):
         GPIO.cleanup()
+        
 
 
     def read_switches():
@@ -68,20 +83,49 @@ class Motor(object):
         z_state = not GPIO.input(Z_LIMIT_PIN)
         return x_state, y_state, z_state
 
+
+    def pen_up(self):
+        self.move('z', 80)
+        
+
+    def click_pen(self):
+        # Check if the Z-axis limit switch is not triggered
+       
+        self.move('z', 80)  # Move the stepper motor (negative direction) to lift the pen
+        time.sleep(3)
+        self.move('z', -80)
+
+    def hold_pen(self):
+
+        # Calculate duty cycle for the desired angle
+
+        # Setup and start PWM on the servo pin
+        servo_pwm = GPIO.PWM(SERVO_PIN, 50)  # 50Hz frequency
+        servo_pwm.start(0)
+        # Allow time for the servo to move
+        servo_pwm.ChangeDutyCycle(2) # left -90 deg position
+        time.sleep(1)
+        # servo_pwm.ChangeDutyCycle(10) # right +90 deg position
+        # time.sleep(1)
+
+        # Stop PWM and cleanup GPIO
+        servo_pwm.stop()
+        
+
     def calibrate(self):
         print("Calibrating...")
 
         # Wait for the x limit switch to be triggered
-        while GPIO.input(X_LIMIT_PIN):  # This is the correct condition
-            self.move('x', -1)
+        while not GPIO.input(X_LIMIT_PIN):  # This is the correct condition
+            self.move('x', 1)
         print('x limit switch triggered')
         
         # Reset the current X position after hitting the limit
         self.current_pos[0] = 0
 
         # Wait for the y limit switch to be triggered
-        while GPIO.input(Y_LIMIT_PIN):  # This is the correct condition
-            self.move('y', -1)
+        while not GPIO.input(Y_LIMIT_PIN):  # This is the correct condition
+            self.move('y', 1)
         print('y limit switch triggered')
         
         # Reset the current Y position after hitting the limit
@@ -116,6 +160,11 @@ class Motor(object):
             dir_pin = Y_DIR
             step_pin = Y_STEP
             position_index = 1
+        elif axis == 'z':
+            dir_pin = Z_DIR
+            step_pin = Z_STEP
+            position_index = 2
+    
         else:
             print("Unknown axis!")
             return False
@@ -148,11 +197,9 @@ class Motor(object):
 
 
 
+motor = Motor()
+
+motor.click_pen()
 
 
-try:
-    motor = Motor()
-    motor.calibrate()
-finally:
-    GPIO.cleanup()
 

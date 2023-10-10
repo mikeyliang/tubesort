@@ -8,8 +8,8 @@ MAX_HEIGHT = 4
 
 class Game(Tubes):
 
-    def __init__(self, img, type, display=True):
-        super().__init__(img, type)
+    def __init__(self, display=True):
+        super().__init__()
         self.display = display
         self.colors = self.getGameColors()  # List of colors in the current game level
         self.tubes = self.getTubeColors()  # Left -> Tube Bottom, Right -> Tube Top
@@ -166,3 +166,7 @@ class NpEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return super(NpEncoder, self).default(obj)
+
+
+
+game = Game()

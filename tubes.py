@@ -3,13 +3,30 @@ import numpy as np
 import math
 from copy import deepcopy
 
+import time
+from pathlib import Path
+import depthai as dai
+
+
+   
+
+     
+            
+
 
 class Tubes:
-    def __init__(self, img_path):
-        self.img = cv2.imread(img_path)
+    def __init__(self):
+        #self.img = cv2.imread(img_path)
+        self.img = self.get_image()
+        self.img = self.crop_image(self.img, 900, 600, 3400, 2800)
+        cv2.imwrite('image.png', self.img)
+        
         self.img_height, self.img_width, _ = self.img.shape
         self.pts = None
+        #self.warped_ipad = self.add_padding(self.findIPAD(self.img), self.img, 1/2)
         self.warped_ipad = self.findIPAD(self.img)
+
+        cv2.imwrite('ipad.png', self.warped_ipad)
 
         
         self.warped_height, self.warped_width, _ = self.warped_ipad.shape
@@ -17,16 +34,102 @@ class Tubes:
         self.tube_centers_warped = []
         self.tube_arr, self.tube_imgs = self.findTube(self.warped_ipad)
 
-        # Scale the tube centers
-        self.tube_centers_original = [
-            (int(pt[0] + self.pts[0][0]), int(pt[1] + self.pts[0][1])) for pt in self.tube_centers_warped]
-        print(self.tube_centers_original)
-        # Plot the transformed tube centers on the original image
-        self.plotTubeCenters(self.tube_centers_original)
+        if self.tube_centers_warped is not None and self.pts is not None:
+            self.tube_centers_original = [
+                (int(pt[0] + self.pts[0][0]), int(pt[1] + self.pts[0][1])) for pt in self.tube_centers_warped
+            ]
+            print(self.tube_centers_original)
+            self.plotTubeCenters(self.tube_centers_original)
+        else:
+            print("Either self.tube_centers_warped or self.pts is None.")
 
         self.colors, self.gamecolors = self.findTubeColors(self.tube_imgs)
 
         print(self.colors)
+
+    def get_image(self):
+
+        img = False
+        
+        pipeline = dai.Pipeline()
+
+        camRgb = pipeline.create(dai.node.ColorCamera)
+        camRgb.setBoardSocket(dai.CameraBoardSocket.CAM_A)
+        camRgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_12_MP)
+
+        xoutRgb = pipeline.create(dai.node.XLinkOut)
+        xoutRgb.setStreamName("rgb")
+        camRgb.video.link(xoutRgb.input)
+
+        xin = pipeline.create(dai.node.XLinkIn)
+        xin.setStreamName("control")
+        xin.out.link(camRgb.inputControl)
+
+        # Properties
+        videoEnc = pipeline.create(dai.node.VideoEncoder)
+        videoEnc.setDefaultProfilePreset(1, dai.VideoEncoderProperties.Profile.MJPEG)
+        camRgb.still.link(videoEnc.input)
+
+        # Linking
+        xoutStill = pipeline.create(dai.node.XLinkOut)
+        xoutStill.setStreamName("still")
+        videoEnc.bitstream.link(xoutStill.input)
+
+        # Connect to device and start pipeline
+        with dai.Device(pipeline) as device:
+
+            # Output queue will be used to get the rgb frames from the output defined above
+            qRgb = device.getOutputQueue(name="rgb", maxSize=30, blocking=False)
+            qStill = device.getOutputQueue(name="still", maxSize=30, blocking=True)
+            qControl = device.getInputQueue(name="control")
+
+            
+
+            # Make sure the destination path is present before starting to store the examples
+            dirName = "rgb_data"
+            Path(dirName).mkdir(parents=True, exist_ok=True)
+
+            while not img:
+                frame = None
+                inRgb = qRgb.tryGet()  # Non-blocking call, will return a new data that has arrived or None otherwise
+                if inRgb is not None:
+                    frame = inRgb.getCvFrame()
+                    # 4k / 4
+                    frame = cv2.pyrDown(frame)
+                    frame = cv2.pyrDown(frame)
+
+                key = cv2.waitKey(1)
+
+                ctrl_initial = dai.CameraControl()
+                ctrl_initial.setManualExposure(5000, 600)  # 10000us (10ms), sensitivity 800
+                ctrl_initial.setBrightness(8)  # Brightness level 2
+                ctrl_initial.setCaptureStill(True)
+                qControl.send(ctrl_initial)
+
+                # Add some delay to allow settings to take effect
+                time.sleep(3)  # 2 seconds delay
+                            
+                    
+
+                print("Sent 'still' event to the camera!")
+
+                if qStill.has():
+                    fName = f"{dirName}/{int(time.time() * 1000)}.jpeg"
+                    with open(fName, "wb") as f:
+                        imgData = qStill.get().getData()
+                        f.write(imgData)
+                        print('Image saved to', fName)
+                        img = True
+
+                        # Convert byte array to OpenCV image
+                        nparr = np.frombuffer(imgData, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        return frame
+
+            
+    def crop_image(self, img, x_start, y_start, x_end, y_end):
+        cropped_img = img[y_start:y_end, x_start:x_end]
+        return cropped_img
 
     def findByColor(self, img):
 
@@ -48,8 +151,8 @@ class Tubes:
         gauss = cv2.GaussianBlur(gray, (3, 3), 0)
         _, thresh_gaussian = cv2.threshold(
             gauss, 0, 200, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        cv2.imshow('gauss', thresh_gaussian)
-        cv2.waitKey(0)
+        # cv2.imshow('gauss', thresh_gaussian)
+        # cv2.waitKey(0)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         mask = cv2.morphologyEx(thresh_gaussian, cv2.MORPH_CLOSE, kernel)
         return mask
@@ -84,14 +187,14 @@ class Tubes:
         thresh = self.findThreshold(img)
         contours = cv2.findContours(
             thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.imshow('thresh', thresh)
-        cv2.waitKey(0)
+        # cv2.imshow('thresh', thresh)
+        # cv2.waitKey(0)
         # plt.imshow(contours)
         # plt.show()
         # print(contours[0][1])
-        a = cv2.drawContours(img, contours[0], -1, (0, 255, 0), 10)
-        cv2.imshow('Contours', a)
-        cv2.waitKey(0)
+        a = cv2.drawContours(img, contours[0], -1, (0, 255, 0), 3)
+        # cv2.imshow('Contours', a)
+        # cv2.waitKey(0)
         # print(contours)
         rects = []
         tubes = []
@@ -172,21 +275,66 @@ class Tubes:
                        radius=5, color=(0, 255, 0), thickness=-1)
 
         # Display the image with the tube centers
-        cv2.imshow('Image with Tube Centers', img_with_centers)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        # cv2.imshow('Image with Tube Centers', img_with_centers)
+        # cv2.waitKey(0)
+        cv2.imwrite('tubecenters.png', img_with_centers)
+
+    # def findIPAD(self, img):
+    #     box = [[700, 400], [2000, 400], [2000, 1600], [700, 1600]]
+    #     # Add padding to the box points
+
+    #     # Apply the four-point transform
+    #     self.pts = np.array(box, dtype=np.float32)
+
+    #     warped_ipad = self.four_point_transform(img, box)
+    #     print(warped_ipad.shape)
+
+    #     return warped_ipad
 
     def findIPAD(self, img):
-        box = [[700, 400], [2000, 400], [2000, 1600], [700, 1600]]
-        # Add padding to the box points
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # Apply the four-point transform
-        self.pts = np.array(box, dtype=np.float32)
+        # Convert the image to the HSV color space
+        hsv_image = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-        warped_ipad = self.four_point_transform(img, box)
-        print(warped_ipad.shape)
+        # Define the color range for iPads (example values, you may need to adjust these)
+        lower_color = np.array([0, 0, 0])        # Lower HSV threshold for black
+        upper_color = np.array([180, 255, 30])   # Upper HSV threshold for black
 
-        return warped_ipad
+        gauss = cv2.GaussianBlur(hsv_image, (7, 7), 0)
+        
+        cv2.imwrite('gauss.png', gauss)
+
+        # Create a binary mask based on the color range
+        color_mask = cv2.inRange(gauss, lower_color, upper_color)
+
+        cv2.imwrite('color.png', color_mask)
+
+        # Find contours in the mask
+        contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Initialize variables to track the largest contour and its bounding rectangle
+        largest_contour = None
+        largest_area = 0
+
+        for contour in contours:
+            # Find the area of the current contour
+            area = cv2.contourArea(contour)
+            if area > largest_area:
+                largest_area = area
+                largest_contour = contour
+
+        rect = None
+        if largest_contour is not None:
+            # Find the bounding rectangle of the largest contour
+            x, y, w, h = cv2.boundingRect(largest_contour)
+            rect = (x, y, w, h)
+            # Draw the bounding rectangle on the original image
+            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            
+            # Extract the iPad region using four_point_transform
+            ipad_image = self.four_point_transform(img, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]])
+        return ipad_image 
 
     def plot_color(self, color):
         bar = np.zeros((50, 300, 3), dtype="uint8")
@@ -200,7 +348,7 @@ class Tubes:
     def findTubeColors(self, tubes_img):
         colors = []
         gamecolors = []
-        for tubes in tubes_img:
+        for t, tubes in enumerate(tubes_img):
             color = []
             height = math.floor(tubes.shape[0]/4 - 1)
             width = math.floor(tubes.shape[1]/4 - 1)
@@ -209,6 +357,7 @@ class Tubes:
             h_pad = math.floor(width / 3)
             v_pad = math.floor(height / 5)
             box_index = 0
+
             while y_top > 0:
                 color_img = tubes[y_top + v_pad: y_bot - 3 *
                                   v_pad,  2 * h_pad: tubes.shape[1] - 2 * h_pad]
@@ -237,13 +386,13 @@ class Tubes:
                 if len(gamecolors) == 0:
                     gamecolors.append(boxcolor)
                     color.append(1)
-                elif all(boxcolor < 50):
+                elif all(boxcolor < 70):
                     continue
                 else:
                     found = False
                     min = []
                     for index, c in enumerate(gamecolors):
-                        if (self.rgb_euclid(boxcolor, c) < 50):
+                        if (self.rgb_euclid(boxcolor, c) < 70):
                             min.append([self.rgb_euclid(boxcolor, c), index])
                             found = True
 
